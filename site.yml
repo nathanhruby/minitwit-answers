@@ -1,0 +1,123 @@
+---
+- name: configure server for minitwit
+  hosts: all
+  vars:
+    - minitwit_config_dir: /home/minitwit/etc
+    - minitwit_database_dir: /home/minitwit/db
+    - minitwit_debug: False
+    - minitwit_flask_appname: minitwit
+    - minitwit_per_page: 30
+    - minitwit_secret_key: 82775hhsvsf77
+    - minitwit_src_dir: /home/minitwit/src
+    - minitwit_system_group: minitwit
+    - minitwit_system_user: minitwit
+    - minitwit_venv_dir: /home/minitwit/venv
+
+  tasks:
+    - name: Install EPEL
+      become: yes
+      package:
+        name: epel-release
+        state: installed
+
+    - name: Install pre-req binary packages
+      become: yes
+      yum:
+        name: "{{ item }}"
+        state: installed
+      with_items:
+        - python-pip
+        - python-virtualenv
+        - sqlite
+        - unzip
+        - zip
+
+    # implicit Red Hat ism, a group of the same name will be created
+    - name: Create minitwit user
+      become: yes
+      user:
+        name: "{{ minitwit_system_user }}"
+
+    - name: Create minitwit directories
+      become: yes
+      file:
+        state: directory
+        path: "{{ item }}"
+        owner: "{{ minitwit_system_user }}"
+        group: "{{ minitwit_system_group }}"
+      with_items:
+        - "{{ minitwit_config_dir }}"
+        - "{{ minitwit_venv_dir }}"
+        - "{{ minitwit_src_dir }}"
+        - "{{ minitwit_database_dir }}"
+
+    - name: Add systemd unit for minitwit
+      become: yes
+      template:
+        src: configs/minitwit.service.j2
+        dest: /etc/systemd/system/minitwit.service
+        owner: root
+        group: root
+        mode: 0444
+      notify: reload systemd
+
+    - name: Add minitwit config file
+      become: yes
+      template:
+        src: configs/minitwit.conf.j2
+        dest: "{{ minitwit_config_dir }}/minitwit.conf"
+        owner: "{{ minitwit_system_user }}"
+        group: "{{ minitwit_system_group }}"
+        mode: 0440
+      notify: restart minitwit
+
+    - name: Unarchive deployment artifact
+      become: yes
+      unarchive:
+        src: "builds/{{ minitwit_deploy_artifact }}"
+        dest: "{{ minitwit_src_dir }}"
+        owner: "{{ minitwit_system_user }}"
+        group: "{{ minitwit_system_group }}"
+      register: minitwit_artifact_unarchive
+      when: minitwit_deploy_artifact|default(False)
+
+    - name: install minitwit
+      become: yes
+      become_user: "{{ minitwit_system_user }}"
+      pip:
+        name: .
+        chdir: "{{ minitwit_src_dir }}/{{ minitwit_deploy_artifact|splitext|first }}"
+        editable: True
+        virtualenv: "{{ minitwit_venv_dir }}"
+      register: minitwit_pip_install
+      when: minitwit_artifact_unarchive|changed
+      notify: restart minitwit
+
+    - name: ensure sqlite database is there
+      become: yes
+      become_user: "{{ minitwit_system_user }}"
+      command: "{{ minitwit_venv_dir }}/bin/flask initdb"
+      args:
+        creates: "{{ minitwit_database_dir }}/minitwit.sqlite"
+      environment: 
+        FLASK_APP: "{{ minitwit_flask_appname }}"
+        MINITWIT_SETTINGS: "{{ minitwit_config_dir }}//minitwit.conf"
+      notify: restart minitwit
+
+    - name: ensure minitwit starts at boot
+      become: yes
+      service:
+        name: minitwit
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: reload systemd
+      become: yes
+      command: systemctl daemon-reload
+
+    - name: restart minitwit
+      become: yes
+      service:
+        name: minitwit
+        state: restarted

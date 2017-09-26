@@ -1,0 +1,28 @@
+---
+- name: create a build artifact
+  hosts: localhost
+  gather_facts: False
+  vars:
+    - builddir: builds
+  vars_prompt:
+    - name: minitwit_version
+      prompt: What is the version of minitwit that you would like to export?
+  tasks:
+    - name: create build dir
+      file:
+        state: directory
+        path: "{{ builddir }}"
+    # git will create the archive file before checking if the named treeish is
+    # resolvable, so cleanup things if the command fails, which is common when
+    # you typo the version number
+    - name: build artifact generation
+      block:
+        - name: make archive of version
+          command:  "git archive --prefix=minitwit-{{ minitwit_version }}/ -o {{ builddir }}/minitwit-{{ minitwit_version }}.zip {{ minitwit_version }}"
+          args:
+            creates: "{{ builddir }}/minitwit-{{ minitwit_version }}.zip"
+      rescue:
+        - name: cleanup build artifact
+          file:
+            state: absent
+            path: "{{ builddir }}/minitwit-{{ minitwit_version }}.zip"
